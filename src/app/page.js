@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { TrendingUp, X, Database, Filter as FilterIcon, Layers, Bookmark } from 'lucide-react';
 import {
   INITIAL_DATA,
@@ -19,6 +19,7 @@ import RawDataSection from '@/components/RawDataSection';
 import FilteredResultsSection from '@/components/FilteredResultsSection';
 import Notification from '@/components/Notification';
 import SavedListView from '@/components/SavedListView';
+import { supabase } from '@/lib/supabase';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -36,6 +37,33 @@ export default function Home() {
     setToast(text);
     window.setTimeout(() => setToast(''), 3000);
   };
+
+  // Memuat data dari database Supabase saat aplikasi dibuka
+  useEffect(() => {
+    async function loadLists() {
+      try {
+        const { data, error } = await supabase
+          .from('saved_lists')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        if (data) {
+          const mapped = data.map((item) => ({
+            id: item.id,
+            name: item.name,
+            createdAt: item.created_at ? new Date(item.created_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+            items: item.items
+          }));
+          setSavedLists(mapped);
+        }
+      } catch (err) {
+        console.error('Error fetching data from Supabase:', err);
+      }
+    }
+    loadLists();
+  }, []);
 
   const includeTerms = useMemo(() => normalizeTerms(filterInclude), [filterInclude]);
   const excludeTerms = useMemo(() => normalizeTerms(filterExclude), [filterExclude]);
@@ -93,30 +121,44 @@ export default function Home() {
     notify('Semua data mentah telah dihapus.');
   };
 
-  const handleAppendToSavedList = (existingList) => {
+  const handleAppendToSavedList = async (existingList) => {
     if (filteredData.length === 0) {
       notify('Tidak ada hasil untuk disimpan.');
       return;
     }
 
-    setSavedLists(prev => prev.map(list => {
-      if (list.id === existingList.id) {
-        const existingKeys = new Set(list.items.map(item => `${item.keyword}|${item.date}`));
-        const newItems = filteredData.filter(item => !existingKeys.has(`${item.keyword}|${item.date}`));
-        return {
-          ...list,
-          items: [...list.items, ...newItems]
-        };
-      }
-      return list;
-    }));
+    const existingKeys = new Set(existingList.items.map(item => `${item.keyword}|${item.date}`));
+    const newItems = filteredData.filter(item => !existingKeys.has(`${item.keyword}|${item.date}`));
+    const updatedItems = [...existingList.items, ...newItems];
 
-    setNewListName('');
-    setShowSaveModal(false);
-    notify(`Data berhasil ditambahkan ke "${existingList.name}".`);
+    try {
+      const { error } = await supabase
+        .from('saved_lists')
+        .update({ items: updatedItems })
+        .eq('id', existingList.id);
+
+      if (error) throw error;
+
+      setSavedLists(prev => prev.map(list => {
+        if (list.id === existingList.id) {
+          return {
+            ...list,
+            items: updatedItems
+          };
+        }
+        return list;
+      }));
+
+      setNewListName('');
+      setShowSaveModal(false);
+      notify(`Data berhasil ditambahkan ke "${existingList.name}" di Supabase.`);
+    } catch (err) {
+      console.error('Error appending list:', err);
+      notify('Gagal memperbarui daftar di database.');
+    }
   };
 
-  const handleSaveCurrentList = () => {
+  const handleSaveCurrentList = async () => {
     if (!newListName.trim()) {
       notify('Nama daftar harus diisi.');
       return;
@@ -129,21 +171,37 @@ export default function Home() {
 
     const existingExact = savedLists.find(l => l.name.toLowerCase() === newListName.trim().toLowerCase());
     if (existingExact) {
-      handleAppendToSavedList(existingExact);
+      await handleAppendToSavedList(existingExact);
       return;
     }
 
-    const newList = {
-      id: Date.now(),
-      name: newListName,
-      createdAt: new Date().toISOString().slice(0, 10),
-      items: filteredData
-    };
+    try {
+      const { data, error } = await supabase
+        .from('saved_lists')
+        .insert([{
+          name: newListName.trim(),
+          items: filteredData
+        }])
+        .select();
 
-    setSavedLists((prev) => [newList, ...prev]);
-    setNewListName('');
-    setShowSaveModal(false);
-    notify('Daftar berhasil disimpan.');
+      if (error) throw error;
+
+      const inserted = data[0];
+      const newList = {
+        id: inserted.id,
+        name: inserted.name,
+        createdAt: inserted.created_at ? new Date(inserted.created_at).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+        items: inserted.items
+      };
+
+      setSavedLists((prev) => [newList, ...prev]);
+      setNewListName('');
+      setShowSaveModal(false);
+      notify('Daftar berhasil disimpan ke Supabase.');
+    } catch (err) {
+      console.error('Error saving list:', err);
+      notify('Gagal menyimpan daftar ke database.');
+    }
   };
 
   const handleLoadSavedList = (list) => {
@@ -154,20 +212,57 @@ export default function Home() {
     notify(`Daftar "${list.name}" berhasil dimuat ke dashboard.`);
   };
 
-  const handleDeleteSavedList = (id) => {
-    setSavedLists((prev) => prev.filter(list => list.id !== id));
-    notify('Daftar berhasil dihapus.');
+  const handleDeleteSavedList = async (id) => {
+    try {
+      const { error } = await supabase
+        .from('saved_lists')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      setSavedLists((prev) => prev.filter(list => list.id !== id));
+      notify('Daftar berhasil dihapus dari Supabase.');
+    } catch (err) {
+      console.error('Error deleting list:', err);
+      notify('Gagal menghapus daftar dari database.');
+    }
   };
 
-  const handleDeleteGroupFromList = (listId, categoryName) => {
-    setSavedLists(prev => prev.map(list => {
-      if (list.id === listId) {
-        const newItems = list.items.filter(item => guessCategory(item.keyword) !== categoryName);
-        return { ...list, items: newItems };
+  const handleDeleteGroupFromList = async (listId, categoryName) => {
+    const listToUpdate = savedLists.find(list => list.id === listId);
+    if (!listToUpdate) return;
+
+    const newItems = listToUpdate.items.filter(item => guessCategory(item.keyword) !== categoryName);
+
+    try {
+      if (newItems.length === 0) {
+        const { error } = await supabase
+          .from('saved_lists')
+          .delete()
+          .eq('id', listId);
+
+        if (error) throw error;
+        setSavedLists(prev => prev.filter(list => list.id !== listId));
+      } else {
+        const { error } = await supabase
+          .from('saved_lists')
+          .update({ items: newItems })
+          .eq('id', listId);
+
+        if (error) throw error;
+        setSavedLists(prev => prev.map(list => {
+          if (list.id === listId) {
+            return { ...list, items: newItems };
+          }
+          return list;
+        }));
       }
-      return list;
-    }).filter(list => list.items.length > 0));
-    notify(`Grup "${categoryName}" berhasil dihapus.`);
+      notify(`Grup "${categoryName}" berhasil dihapus.`);
+    } catch (err) {
+      console.error('Error deleting group:', err);
+      notify('Gagal memperbarui daftar di database.');
+    }
   };
 
   const handleCopySavedList = (items) => {

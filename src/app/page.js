@@ -23,20 +23,56 @@ import { supabase } from '@/lib/supabase';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [dataMentah, setDataMentah] = useState(INITIAL_DATA);
+  const [dataMentah, setDataMentah] = useState([]);
   const [filterInclude, setFilterInclude] = useState('');
-  const [filterExclude, setFilterExclude] = useState(DEFAULT_EXCLUDE);
+  const [filterExclude, setFilterExclude] = useState('');
   const [delimiter, setDelimiter] = useState('comma');
   const [bulkInput, setBulkInput] = useState('');
   const [savedLists, setSavedLists] = useState([]);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [newListName, setNewListName] = useState('');
   const [toast, setToast] = useState('');
+  const [isLocalLoaded, setIsLocalLoaded] = useState(false);
 
   const notify = (text) => {
     setToast(text);
     window.setTimeout(() => setToast(''), 3000);
   };
+
+  // Memuat data dari localStorage saat aplikasi pertama kali dibuka (di client-side)
+  useEffect(() => {
+    const savedRaw = localStorage.getItem('cleaner_data_mentah');
+    const savedInclude = localStorage.getItem('cleaner_filter_include');
+    const savedExclude = localStorage.getItem('cleaner_filter_exclude');
+
+    if (savedRaw) {
+      try {
+        setDataMentah(JSON.parse(savedRaw));
+      } catch (e) {
+        setDataMentah(INITIAL_DATA);
+      }
+    } else {
+      setDataMentah(INITIAL_DATA);
+    }
+
+    if (savedInclude !== null) setFilterInclude(savedInclude);
+    if (savedExclude !== null) {
+      setFilterExclude(savedExclude);
+    } else {
+      setFilterExclude(DEFAULT_EXCLUDE);
+    }
+    
+    setIsLocalLoaded(true);
+  }, []);
+
+  // Menyimpan data mentah dan filter ke localStorage setiap kali ada perubahan
+  useEffect(() => {
+    if (isLocalLoaded) {
+      localStorage.setItem('cleaner_data_mentah', JSON.stringify(dataMentah));
+      localStorage.setItem('cleaner_filter_include', filterInclude);
+      localStorage.setItem('cleaner_filter_exclude', filterExclude);
+    }
+  }, [dataMentah, filterInclude, filterExclude, isLocalLoaded]);
 
   // Memuat data dari database Supabase saat aplikasi dibuka
   useEffect(() => {
